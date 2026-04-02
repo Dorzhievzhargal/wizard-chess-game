@@ -3,7 +3,7 @@ namespace WizardChess.Core
     /// <summary>
     /// Animation states for chess piece animations.
     /// </summary>
-    public enum AnimationState
+    public enum ChessAnimationState
     {
         Idle,
         Move,

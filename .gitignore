@@ -41,3 +41,12 @@ crashlytics-buildid.txt
 *.aab
 *.unitypackage
 *.app
+
+# .NET build artifacts
+Tests/bin/
+Tests/obj/
+**/bin/
+**/obj/
+
+# Unity project copy
+Setup Guide In-Editor Tutorial/

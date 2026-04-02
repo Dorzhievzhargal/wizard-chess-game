@@ -17,6 +17,7 @@ namespace WizardChess.Interfaces
         IEnumerator MovePieceTo(BoardPosition target);
         void RemovePiece(BoardPosition position);
         void SetInputEnabled(bool enabled);
+        bool IsInputEnabled { get; }
 
         GameObject GetPieceObject(BoardPosition position);
 

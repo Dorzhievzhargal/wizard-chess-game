@@ -6,11 +6,11 @@ namespace WizardChess.Interfaces
 {
     /// <summary>
     /// Controls piece animations: Idle, Move, Attack, Hit_Reaction, Death.
-    /// Uses naming convention: {PieceType}_{AnimationState}.
+    /// Uses naming convention: {PieceType}_{ChessAnimationState}.
     /// </summary>
     public interface IAnimationController
     {
-        void PlayAnimation(GameObject piece, AnimationState state);
+        void PlayAnimation(GameObject piece, ChessAnimationState state);
         void PlayDeathEffect(GameObject piece, PieceType type);
         bool IsAnimationPlaying(GameObject piece);
 
