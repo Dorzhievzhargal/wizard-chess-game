@@ -23,14 +23,12 @@ namespace WizardChess.Pieces
         [SerializeField] private float pieceYOffset = 0.0f;
 
         [Header("Movement Animation")]
-        [SerializeField] private float moveStepDuration = 0.2f;
-        [SerializeField] private float liftHeight = 0.5f;
+        [SerializeField] private float moveSpeed = 3.0f;
 
         // ── Internal state ─────────────────────────────────────────────
 
         private IBoardManager boardManager;
-        private Dictionary<string, GameObject> pieceObjects;
-        private Dictionary<string, ChessPiece> pieceData;
+        private Dictionary<string, GameObject> pieceObjects; // ONLY visual mapping: BoardPosition -> GameObject
         private Transform piecesContainer;
         private bool inputEnabled = true;
         private BoardPosition? selectedPosition;
@@ -53,7 +51,6 @@ namespace WizardChess.Pieces
         private void Awake()
         {
             pieceObjects = new Dictionary<string, GameObject>();
-            pieceData = new Dictionary<string, ChessPiece>();
 
             if (boardManagerComponent != null)
             {
@@ -66,6 +63,7 @@ namespace WizardChess.Pieces
         /// <summary>
         /// Creates all piece GameObjects from the given list using PlaceholderModelFactory
         /// and positions them on the board via IBoardManager.BoardToWorldPosition.
+        /// VISUAL ONLY: Does not store chess logic data.
         /// </summary>
         public void SpawnPieces(List<ChessPiece> pieces)
         {
@@ -73,6 +71,8 @@ namespace WizardChess.Pieces
             EnsureContainer();
 
             if (pieces == null) return;
+
+            Debug.Log($"[PieceController] SpawnPieces: Spawning {pieces.Count} pieces");
 
             foreach (var piece in pieces)
             {
@@ -86,8 +86,37 @@ namespace WizardChess.Pieces
                 pieceObj.transform.SetParent(piecesContainer, true);
 
                 pieceObjects[key] = pieceObj;
-                pieceData[key] = piece;
+
+                // Debug: Log detailed spawn information
+                var renderers = pieceObj.GetComponentsInChildren<Renderer>();
+                string boundsInfo = "no renderers";
+                if (renderers.Length > 0)
+                {
+                    Bounds bounds = renderers[0].bounds;
+                    for (int i = 1; i < renderers.Length; i++)
+                        bounds.Encapsulate(renderers[i].bounds);
+                    boundsInfo = $"bounds center={bounds.center}, size={bounds.size}";
+                }
+
+                Debug.Log($"[PieceController] Spawned {piece.Color} {piece.Type} at board({piece.Position.File},{piece.Position.Rank}) " +
+                          $"world={worldPos} | GameObject={pieceObj.name} active={pieceObj.activeSelf} " +
+                          $"pos={pieceObj.transform.position} scale={pieceObj.transform.localScale} | {boundsInfo}");
+                
+                // Check if model child exists
+                Transform modelChild = pieceObj.transform.Find("Model");
+                if (modelChild != null)
+                {
+                    Debug.Log($"[PieceController]   Model child: active={modelChild.gameObject.activeSelf} " +
+                              $"localPos={modelChild.localPosition} localScale={modelChild.localScale} " +
+                              $"renderers={modelChild.GetComponentsInChildren<Renderer>().Length}");
+                }
+                else
+                {
+                    Debug.LogWarning($"[PieceController]   No 'Model' child found in {pieceObj.name}!");
+                }
             }
+
+            Debug.Log($"[PieceController] SpawnPieces complete. Total pieces in scene: {pieceObjects.Count}");
         }
 
         /// <summary>
@@ -101,7 +130,8 @@ namespace WizardChess.Pieces
         }
 
         /// <summary>
-        /// Removes and destroys the piece at the given board position.
+        /// Removes and destroys the piece GameObject at the given board position.
+        /// VISUAL ONLY: Does not modify chess logic state.
         /// </summary>
         public void RemovePiece(BoardPosition position)
         {
@@ -112,19 +142,86 @@ namespace WizardChess.Pieces
                 Destroy(obj);
                 pieceObjects.Remove(key);
             }
-
-            pieceData.Remove(key);
         }
 
         /// <summary>
-        /// Removes a piece from tracking dictionaries WITHOUT destroying the GameObject.
+        /// Removes a piece from tracking dictionary WITHOUT destroying the GameObject.
         /// Used for cinematic captures where the defender needs to stay alive during battle animation.
+        /// VISUAL ONLY: Does not modify chess logic state.
         /// </summary>
         public void UntrackPiece(BoardPosition position)
         {
             string key = PositionKey(position);
             pieceObjects.Remove(key);
-            pieceData.Remove(key);
+        }
+
+        /// <summary>
+        /// Re-registers a piece GameObject at a new position after a cinematic capture.
+        /// VISUAL ONLY: Updates visual mapping, does not modify chess logic state.
+        /// </summary>
+        public void RetrackPiece(GameObject pieceObj, BoardPosition oldPos, BoardPosition newPos)
+        {
+            if (pieceObj == null)
+            {
+                Debug.LogWarning("[PieceController] RetrackPiece: pieceObj is null");
+                return;
+            }
+
+            string oldKey = PositionKey(oldPos);
+            string newKey = PositionKey(newPos);
+
+            // Remove from old position if it's the same object
+            if (pieceObjects.ContainsKey(oldKey) && pieceObjects[oldKey] == pieceObj)
+                pieceObjects.Remove(oldKey);
+
+            // Register at new position
+            pieceObjects[newKey] = pieceObj;
+
+            // Update selection tracking if the moved piece was selected
+            if (selectedPosition.HasValue &&
+                selectedPosition.Value.File == oldPos.File &&
+                selectedPosition.Value.Rank == oldPos.Rank)
+            {
+                selectedPosition = newPos;
+            }
+
+            Debug.Log($"[PieceController] RetrackPiece (visual only): {oldKey} -> {newKey}");
+        }
+
+        /// <summary>
+        /// Replaces the visual model of a piece at the given position with a new piece type.
+        /// Used for pawn promotion: destroys the old pawn model and spawns the promoted piece model.
+        /// Preserves position, color, and board registration.
+        /// VISUAL ONLY: Does not modify chess logic state (caller must update engine separately).
+        /// </summary>
+        public void ReplaceVisualModel(BoardPosition position, PieceType newType, PieceColor color)
+        {
+            string key = PositionKey(position);
+
+            // Get the old piece GameObject
+            if (!pieceObjects.TryGetValue(key, out GameObject oldPieceObj))
+            {
+                Debug.LogWarning($"[PieceController] ReplaceVisualModel: no piece at {key}");
+                return;
+            }
+
+            // Store the world position before destroying
+            Vector3 worldPos = oldPieceObj.transform.position;
+
+            // Destroy the old piece
+            Destroy(oldPieceObj);
+            pieceObjects.Remove(key);
+
+            // Create the new piece model
+            GameObject newPieceObj = PlaceholderModelFactory.CreatePieceModel(newType, color, tileSize);
+            newPieceObj.transform.position = worldPos;
+            newPieceObj.transform.SetParent(piecesContainer, true);
+
+            // Register the new piece at the same position
+            pieceObjects[key] = newPieceObj;
+
+            Debug.Log($"[PieceController] ReplaceVisualModel: replaced piece at ({position.File},{position.Rank}) " +
+                      $"with {color} {newType}");
         }
 
         /// <summary>
@@ -133,6 +230,16 @@ namespace WizardChess.Pieces
         public static string PositionKeyStatic(BoardPosition pos)
         {
             return $"{pos.File}_{pos.Rank}";
+        }
+
+        /// <summary>
+        /// Returns the world position for a board position, including Y offset.
+        /// This is the position where pieces should actually be placed.
+        /// Public accessor for GameManager to use the same coordinate system.
+        /// </summary>
+        public Vector3 GetWorldPositionForTile(BoardPosition position)
+        {
+            return GetWorldPosition(position);
         }
 
         // ── Selection & movement ──────────────────────────────────────
@@ -233,158 +340,237 @@ namespace WizardChess.Pieces
         }
 
         /// <summary>
-        /// Animates the currently selected piece to the target position using step-by-step
-        /// hopping motion (lift → move horizontally → set down) for each intermediate tile.
-        /// Knights perform a single hop directly to the target.
-        /// After animation, updates internal dictionaries and clears selection.
+        /// Animates a piece GameObject smoothly from one board position to another.
+        /// VISUAL ONLY: Updates visual mapping, does not modify chess logic state.
+        /// This is for NORMAL MOVES ONLY - no combat offset, no strike distance.
+        /// Piece walks directly from start tile center to destination tile center.
+        /// Triggers Walking animation on Animator models during movement.
+        /// Does NOT clear selection state or restore selection visuals — that is
+        /// GameManager's responsibility via DeselectPiece().
+        /// Does NOT manage inputEnabled — that is GameManager's responsibility.
+        /// CRITICAL: Always snaps to exact tile center at the end to prevent drift.
         /// </summary>
-        public IEnumerator MovePieceTo(BoardPosition target)
+        public IEnumerator MovePieceTo(BoardPosition from, BoardPosition target)
         {
-            if (!selectedPosition.HasValue) yield break;
-
-            BoardPosition from = selectedPosition.Value;
             string fromKey = PositionKey(from);
 
-            if (!pieceObjects.TryGetValue(fromKey, out GameObject pieceObj)) yield break;
-            if (!pieceData.TryGetValue(fromKey, out ChessPiece piece)) yield break;
-
-            // Disable input during movement animation to prevent concurrent interactions
-            bool wasInputEnabled = inputEnabled;
-            inputEnabled = false;
-
-            // Build path: knights hop directly, others step tile-by-tile
-            List<BoardPosition> path = piece.Type == PieceType.Knight
-                ? new List<BoardPosition> { target }
-                : BuildStepPath(from, target);
-
-            // Animate each step along the path
-            foreach (BoardPosition step in path)
+            if (!pieceObjects.TryGetValue(fromKey, out GameObject pieceObj))
             {
-                yield return AnimateSingleStep(pieceObj, step);
+                Debug.LogWarning($"[PieceController] MovePieceTo: no piece object at {fromKey}");
+                yield break;
             }
 
-            // Update dictionaries: remove old key, add new key
+            Vector3 startPos = pieceObj.transform.position;
+            Vector3 endPos = GetWorldPosition(target);
+
+            // Calculate movement direction for rotation
+            Vector3 moveDir = endPos - startPos;
+            moveDir.y = 0f;
+            
+            // Rotate piece to face movement direction
+            // CRITICAL: Use actual movement direction, not model's initial facing
+            // Black pieces need 180° correction because their models face backward
+            if (moveDir.sqrMagnitude > 0.001f)
+            {
+                Quaternion baseRot = Quaternion.LookRotation(moveDir);
+                bool isBlack = IsBlackPiece(pieceObj);
+                pieceObj.transform.rotation = isBlack 
+                    ? baseRot * Quaternion.Euler(0f, 180f, 0f) 
+                    : baseRot;
+            }
+
+            SetWalkAnimation(pieceObj, true);
+
+            float distance = Vector3.Distance(startPos, endPos);
+            float duration = distance / Mathf.Max(moveSpeed, 0.1f);
+            float elapsed = 0f;
+
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                float t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / duration));
+                pieceObj.transform.position = Vector3.Lerp(startPos, endPos, t);
+                yield return null;
+            }
+
+            SetWalkAnimation(pieceObj, false);
+
+            // CRITICAL: Force snap to EXACT tile center - board logic is source of truth
+            SnapPieceToTileCenter(pieceObj, target);
+
+            // Update visual mapping: move GameObject from old position to new position
             string toKey = PositionKey(target);
             pieceObjects.Remove(fromKey);
             pieceObjects[toKey] = pieceObj;
 
-            pieceData.Remove(fromKey);
-            piece.Position = target;
-            pieceData[toKey] = piece;
-
-            // Restore selection visuals before clearing state (piece has moved to new position)
-            if (selectedRenderers != null && originalColors != null)
+            // If the moved piece was selected visually, update selection to new tile
+            if (selectedPosition.HasValue &&
+                selectedPosition.Value.File == from.File &&
+                selectedPosition.Value.Rank == from.Rank)
             {
-                for (int i = 0; i < selectedRenderers.Length; i++)
-                {
-                    if (selectedRenderers[i] != null)
-                    {
-                        Material mat = selectedRenderers[i].material;
-                        if (mat.HasProperty("_BaseColor"))
-                            mat.SetColor("_BaseColor", originalColors[i]);
-                        else
-                            mat.color = originalColors[i];
-                    }
-                }
+                selectedPosition = target;
             }
-            // Restore original scale
-            if (originalSelectedScale != Vector3.zero)
-                pieceObj.transform.localScale = originalSelectedScale;
 
-            // Clear selection state
-            selectedPosition = null;
-            selectedRenderers = null;
-            originalColors = null;
+            Debug.Log($"[PieceController] NormalMove complete: from ({from.File},{from.Rank}) to ({target.File},{target.Rank}), " +
+                      $"piece at {pieceObj.transform.position}, expected {endPos}");
+        }
 
-            // Restore input state after animation completes
-            inputEnabled = wasInputEnabled;
+        /// <summary>
+        /// Executes a cinematic capture move with battle animation.
+        /// CAPTURE FLOW:
+        /// 1. Attacker moves to strike position near defender
+        /// 2. Both pieces face each other (handled by caller via callback)
+        /// 3. Battle animation plays (handled by caller)
+        /// 4. Defender is destroyed (handled by caller)
+        /// 5. Attacker moves to EXACT CENTER of defender's tile
+        /// 6. Attacker is re-registered at new position
+        /// This method handles steps 1, 5, and 6. Caller handles 2, 3, 4 via callback.
+        /// </summary>
+        public IEnumerator ExecuteCaptureMove(GameObject attackerObj, BoardPosition from, BoardPosition to, 
+            float strikeDistance, System.Func<IEnumerator> onBattlePosition)
+        {
+            if (attackerObj == null)
+            {
+                Debug.LogWarning("[PieceController] ExecuteCaptureMove: attackerObj is null");
+                yield break;
+            }
+
+            Vector3 fromWorld = GetWorldPosition(from);
+            Vector3 toWorld = GetWorldPosition(to);
+
+            // Calculate strike position — stop strikeDistance tiles away from defender
+            Vector3 dir = (toWorld - fromWorld);
+            dir.y = 0f;
+            dir = dir.sqrMagnitude > 0.0001f ? dir.normalized : Vector3.forward;
+            Vector3 strikePos = toWorld - dir * strikeDistance;
+
+            // Step 1: Move attacker to strike position
+            SetWalkAnimation(attackerObj, true);
+            
+            // Rotate to face movement direction
+            // Black pieces need 180° correction because their models face backward
+            if (dir.sqrMagnitude > 0.001f)
+            {
+                Quaternion baseRot = Quaternion.LookRotation(dir);
+                bool isBlack = IsBlackPiece(attackerObj);
+                attackerObj.transform.rotation = isBlack 
+                    ? baseRot * Quaternion.Euler(0f, 180f, 0f) 
+                    : baseRot;
+            }
+            
+            yield return StartCoroutine(MoveToWorldPositionInternal(attackerObj, strikePos, 0.6f));
+            SetWalkAnimation(attackerObj, false);
+
+            // Steps 2-4: Caller handles battle (face each other, animate, destroy defender)
+            if (onBattlePosition != null)
+            {
+                yield return StartCoroutine(onBattlePosition());
+            }
+
+            // Step 5: Move attacker to EXACT CENTER of defender's tile
+            if (attackerObj != null && attackerObj.activeSelf)
+            {
+                SetWalkAnimation(attackerObj, true);
+                
+                // Rotate to face final movement direction
+                // Black pieces need 180° correction because their models face backward
+                Vector3 finalDir = (toWorld - attackerObj.transform.position);
+                finalDir.y = 0f;
+                if (finalDir.sqrMagnitude > 0.001f)
+                {
+                    Quaternion baseRot = Quaternion.LookRotation(finalDir);
+                    bool isBlack = IsBlackPiece(attackerObj);
+                    attackerObj.transform.rotation = isBlack 
+                        ? baseRot * Quaternion.Euler(0f, 180f, 0f) 
+                        : baseRot;
+                }
+                
+                yield return StartCoroutine(MoveToWorldPositionInternal(attackerObj, toWorld, 0.3f));
+                SetWalkAnimation(attackerObj, false);
+
+                // CRITICAL: Force snap to EXACT tile center
+                SnapPieceToTileCenter(attackerObj, to);
+            }
+
+            // Step 6: Re-register attacker at new position
+            RetrackPiece(attackerObj, from, to);
+
+            Debug.Log($"[PieceController] CaptureMove complete: from ({from.File},{from.Rank}) to ({to.File},{to.Rank}), " +
+                      $"piece at {attackerObj.transform.position}, expected {toWorld}");
+        }
+
+        /// <summary>
+        /// Internal helper: Smoothly moves a GameObject to a world position over duration.
+        /// Snaps to exact target at the end.
+        /// </summary>
+        private IEnumerator MoveToWorldPositionInternal(GameObject obj, Vector3 target, float duration)
+        {
+            if (obj == null) yield break;
+            
+            Vector3 start = obj.transform.position;
+            float elapsed = 0f;
+            
+            while (elapsed < duration)
+            {
+                if (obj == null) yield break;
+                elapsed += Time.deltaTime;
+                float t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / duration));
+                obj.transform.position = Vector3.Lerp(start, target, t);
+                yield return null;
+            }
+            
+            if (obj != null)
+                obj.transform.position = target;
+        }
+
+        /// <summary>
+        /// Force-snaps a piece GameObject to the exact center of a tile.
+        /// This is the FINAL positioning step that ensures board logic is the source of truth.
+        /// Resets rotation to upright if needed.
+        /// </summary>
+        public void SnapPieceToTileCenter(GameObject pieceObj, BoardPosition position)
+        {
+            if (pieceObj == null) return;
+
+            Vector3 exactCenter = GetWorldPosition(position);
+            pieceObj.transform.position = exactCenter;
+
+            // Reset any rotation drift (keep only Y rotation for facing direction)
+            Vector3 euler = pieceObj.transform.rotation.eulerAngles;
+            pieceObj.transform.rotation = Quaternion.Euler(0f, euler.y, 0f);
+
+            // Ensure piece is active
+            if (!pieceObj.activeSelf)
+                pieceObj.SetActive(true);
+
+            Debug.Log($"[PieceController] SnapPieceToTileCenter: piece snapped to {exactCenter} " +
+                      $"at tile ({position.File},{position.Rank})");
         }
 
         // ── Movement helpers ──────────────────────────────────────────
 
         /// <summary>
-        /// Builds a tile-by-tile path from <paramref name="from"/> to <paramref name="to"/>.
-        /// Moves along the file axis first, then the rank axis.
-        /// Does not include the starting position.
+        /// Determines if a piece GameObject is black based on its name.
+        /// Black pieces have "Black" in their GameObject name from PlaceholderModelFactory.
         /// </summary>
-        private static List<BoardPosition> BuildStepPath(BoardPosition from, BoardPosition to)
+        private static bool IsBlackPiece(GameObject pieceObj)
         {
-            var path = new List<BoardPosition>();
-
-            int currentFile = from.File;
-            int currentRank = from.Rank;
-
-            int fileDir = to.File > currentFile ? 1 : (to.File < currentFile ? -1 : 0);
-            int rankDir = to.Rank > currentRank ? 1 : (to.Rank < currentRank ? -1 : 0);
-
-            // Move diagonally as far as possible (both axes simultaneously)
-            while (currentFile != to.File && currentRank != to.Rank)
-            {
-                currentFile += fileDir;
-                currentRank += rankDir;
-                path.Add(new BoardPosition(currentFile, currentRank));
-            }
-
-            // Then finish any remaining straight-line steps
-            while (currentFile != to.File)
-            {
-                currentFile += fileDir;
-                path.Add(new BoardPosition(currentFile, currentRank));
-            }
-
-            while (currentRank != to.Rank)
-            {
-                currentRank += rankDir;
-                path.Add(new BoardPosition(currentFile, currentRank));
-            }
-
-            return path;
+            if (pieceObj == null) return false;
+            return pieceObj.name.Contains("Black");
         }
 
         /// <summary>
-        /// Animates a single hop: lift up → move horizontally → set down.
-        /// Each phase takes moveStepDuration / 3 seconds.
+        /// Sets the Walking bool on the piece's Animator (if present).
+        /// Used during smooth movement to trigger walk animation on 3D models.
         /// </summary>
-        private IEnumerator AnimateSingleStep(GameObject pieceObj, BoardPosition target)
+        private static void SetWalkAnimation(GameObject pieceObj, bool walking)
         {
-            Vector3 startPos = pieceObj.transform.position;
-            Vector3 endPos = GetWorldPosition(target);
-
-            float phaseDuration = moveStepDuration / 3f;
-
-            // Phase 1: Lift up
-            Vector3 liftedStart = startPos + Vector3.up * liftHeight;
-            yield return LerpPosition(pieceObj, startPos, liftedStart, phaseDuration);
-
-            // Phase 2: Move horizontally (stay lifted)
-            Vector3 liftedEnd = endPos + Vector3.up * liftHeight;
-            yield return LerpPosition(pieceObj, liftedStart, liftedEnd, phaseDuration);
-
-            // Phase 3: Set down
-            yield return LerpPosition(pieceObj, liftedEnd, endPos, phaseDuration);
-        }
-
-        /// <summary>
-        /// Smoothly interpolates a GameObject's position from start to end over the given duration.
-        /// </summary>
-        private static IEnumerator LerpPosition(GameObject obj, Vector3 from, Vector3 to, float duration)
-        {
-            if (duration <= 0f)
+            if (pieceObj == null) return;
+            var animator = pieceObj.GetComponentInChildren<Animator>();
+            if (animator != null && animator.runtimeAnimatorController != null)
             {
-                obj.transform.position = to;
-                yield break;
+                animator.SetBool("Walking", walking);
             }
-
-            float elapsed = 0f;
-            while (elapsed < duration)
-            {
-                elapsed += Time.deltaTime;
-                float t = Mathf.Clamp01(elapsed / duration);
-                obj.transform.position = Vector3.Lerp(from, to, t);
-                yield return null;
-            }
-
-            obj.transform.position = to;
         }
 
         /// <summary>
@@ -449,7 +635,6 @@ namespace WizardChess.Pieces
             }
 
             pieceObjects = new Dictionary<string, GameObject>();
-            pieceData = new Dictionary<string, ChessPiece>();
 
             if (piecesContainer != null)
             {

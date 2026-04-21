@@ -31,17 +31,26 @@ namespace WizardChess.CameraModule
         private Vector3 _shakeOffset;
         private Coroutine _shakeCoroutine;
         private bool _isTransitioning;
+        
+        // Store initial camera position set in editor
+        private Vector3 _initialPosition;
+        private Quaternion _initialRotation;
 
         private void Awake()
         {
             _camera = GetComponent<UnityEngine.Camera>();
             if (_camera == null)
                 _camera = UnityEngine.Camera.main;
+            
+            // Save initial camera position from editor
+            _initialPosition = transform.position;
+            _initialRotation = transform.rotation;
         }
 
         private void Start()
         {
-            SetGameplayView();
+            // Camera position is now set manually in the editor
+            // SetGameplayView() can still be called programmatically when needed
         }
 
         /// <summary>
@@ -107,6 +116,7 @@ namespace WizardChess.CameraModule
 
         /// <summary>
         /// Smoothly returns the camera to the gameplay view after a battle.
+        /// Uses the initial position set in the editor.
         /// </summary>
         public IEnumerator ReturnToGameplayView()
         {
@@ -115,20 +125,19 @@ namespace WizardChess.CameraModule
 
             Vector3 startPos = transform.position;
             Quaternion startRot = transform.rotation;
-            Quaternion targetRot = Quaternion.Euler(gameplayRotation);
 
             float elapsed = 0f;
             while (elapsed < transitionDuration)
             {
                 elapsed += Time.deltaTime;
                 float t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / transitionDuration));
-                transform.position = Vector3.Lerp(startPos, gameplayPosition, t);
-                transform.rotation = Quaternion.Slerp(startRot, targetRot, t);
+                transform.position = Vector3.Lerp(startPos, _initialPosition, t);
+                transform.rotation = Quaternion.Slerp(startRot, _initialRotation, t);
                 yield return null;
             }
 
-            transform.position = gameplayPosition;
-            transform.eulerAngles = gameplayRotation;
+            transform.position = _initialPosition;
+            transform.rotation = _initialRotation;
             _shakeOffset = Vector3.zero;
             _isTransitioning = false;
         }

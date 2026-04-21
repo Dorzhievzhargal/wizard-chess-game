@@ -263,10 +263,19 @@ namespace WizardChess.Core
                 useCinematicCapture = attackerObj != null && defenderObj != null;
             }
 
+            // Debug: log move details
+            Vector3 fromWorld = pieceController.GetWorldPositionForTile(move.From);
+            Vector3 toWorld = pieceController.GetWorldPositionForTile(move.To);
+            Debug.Log($"[WizardChess] ExecuteMove: {(attackerType.HasValue ? attackerType.Value.ToString() : "?")} " +
+                      $"from ({move.From.File},{move.From.Rank}) to ({move.To.File},{move.To.Rank}) " +
+                      $"isCapture={move.IsCapture} | fromWorld={fromWorld} toWorld={toWorld}");
+
             // Execute the move in the chess engine
             MoveResult result = chessEngine.MakeMove(move);
             if (!result.Success)
             {
+                Debug.LogWarning($"[WizardChess] ExecuteMove: ChessEngine.MakeMove FAILED for " +
+                                 $"({move.From.File},{move.From.Rank})->({move.To.File},{move.To.Rank})");
                 isProcessingMove = false;
                 pieceController.SetInputEnabled(true);
                 yield break;
@@ -282,86 +291,38 @@ namespace WizardChess.Core
                 {
                     // En passant: basic removal (no cinematic battle)
                     pieceController.RemovePiece(enPassantCapturePos.Value);
-                    boardManager.RemovePiece(enPassantCapturePos.Value);
 
-                    // Animate the attacker movement, then deselect
-                    yield return StartCoroutine(pieceController.MovePieceTo(move.To));
+                    // Animate the attacker movement (normal move to destination)
+                    yield return StartCoroutine(pieceController.MovePieceTo(move.From, move.To));
                     pieceController.DeselectPiece();
                 }
                 else if (useCinematicCapture)
                 {
-                    // Cinematic capture: move attacker NEAR defender, play battle, then move to target
-                    // Remove defender from PieceController dict (but DON'T destroy the GameObject yet)
+                    // Cinematic capture using new ExecuteCaptureMove method
                     pieceController.UntrackPiece(move.To);
-
-                    // Calculate a position near the defender (offset by ~0.5 tile toward attacker)
-                    Vector3 attackerWorldPos = boardManager.BoardToWorldPosition(move.From);
-                    Vector3 defenderWorldPos = boardManager.BoardToWorldPosition(move.To);
-                    Vector3 dirToDefender = (defenderWorldPos - attackerWorldPos).normalized;
-                    float stopDistance = 0.5f; // stop half a tile away from defender
-                    Vector3 battlePosition = defenderWorldPos - dirToDefender * stopDistance;
-
-                    // Move attacker to battle position (near defender, not on top)
-                    yield return StartCoroutine(MoveToWorldPosition(attackerObj, battlePosition, 0.4f));
-
-                    // Face the defender
-                    if (attackerObj != null)
-                    {
-                        Vector3 lookDir = defenderWorldPos - attackerObj.transform.position;
-                        lookDir.y = 0f;
-                        if (lookDir.sqrMagnitude > 0.001f)
-                            attackerObj.transform.rotation = Quaternion.LookRotation(lookDir);
-                    }
-                    // Face the attacker (defender looks at attacker)
-                    if (defenderObj != null)
-                    {
-                        Vector3 lookDir = battlePosition - defenderObj.transform.position;
-                        lookDir.y = 0f;
-                        if (lookDir.sqrMagnitude > 0.001f)
-                            defenderObj.transform.rotation = Quaternion.LookRotation(lookDir);
-                    }
-
                     pieceController.DeselectPiece();
 
-                    // Play cinematic battle animation (defender GameObject still exists)
-                    PieceType defenderType = result.CapturedPiece.HasValue
-                        ? result.CapturedPiece.Value.Type
-                        : PieceType.Pawn;
-                    yield return StartCoroutine(battleSystem.ExecuteCapture(
-                        attackerObj, defenderObj, attackerType.Value, defenderType));
-
-                    // Now destroy the defender after battle completes
-                    if (defenderObj != null)
-                        Object.Destroy(defenderObj);
-
-                    // Ensure attacker is still active after battle
-                    if (attackerObj != null && !attackerObj.activeSelf)
-                        attackerObj.SetActive(true);
-
-                    // Move attacker to the actual target tile using PieceController
-                    // First select the attacker piece so MovePieceTo knows which piece to move
-                    pieceController.SelectPiece(move.From);
-                    yield return StartCoroutine(pieceController.MovePieceTo(move.To));
-                    pieceController.DeselectPiece();
-
-                    // Remove defender visuals from board after battle completes
-                    boardManager.RemovePiece(move.To);
+                    // Execute capture with battle callback
+                    yield return StartCoroutine(pieceController.ExecuteCaptureMove(
+                        attackerObj, move.From, move.To, 0.7f,
+                        () => ExecuteBattleSequence(attackerObj, defenderObj, attackerType.Value, 
+                            result.CapturedPiece.HasValue ? result.CapturedPiece.Value.Type : PieceType.Pawn)
+                    ));
                 }
                 else
                 {
                     // Fallback: basic capture (battleSystem is null)
                     pieceController.RemovePiece(move.To);
-                    boardManager.RemovePiece(move.To);
 
-                    // Animate the attacker movement, then deselect
-                    yield return StartCoroutine(pieceController.MovePieceTo(move.To));
+                    // Animate the attacker movement (normal move to destination)
+                    yield return StartCoroutine(pieceController.MovePieceTo(move.From, move.To));
                     pieceController.DeselectPiece();
                 }
             }
             else
             {
-                // Non-capture move: animate movement, then deselect
-                yield return StartCoroutine(pieceController.MovePieceTo(move.To));
+                // Non-capture move: animate movement directly to destination
+                yield return StartCoroutine(pieceController.MovePieceTo(move.From, move.To));
                 pieceController.DeselectPiece();
             }
 
@@ -371,6 +332,19 @@ namespace WizardChess.Core
                 yield return StartCoroutine(HandleCastlingRook(move));
             }
 
+            // Handle pawn promotion visual update
+            if (move.PromotionType.HasValue)
+            {
+                // Get the piece color from the engine (piece is now at the destination)
+                ChessPiece? promotedPiece = chessEngine.GetPieceAt(move.To);
+                if (promotedPiece.HasValue)
+                {
+                    // Replace the pawn visual model with the promoted piece model
+                    pieceController.ReplaceVisualModel(move.To, move.PromotionType.Value, promotedPiece.Value.Color);
+                    Debug.Log($"[WizardChess] Pawn promoted to {move.PromotionType.Value} at ({move.To.File},{move.To.Rank})");
+                }
+            }
+
             // Task 5.5: Handle game state after move
             HandleGameState(result.NewGameState);
 
@@ -378,6 +352,59 @@ namespace WizardChess.Core
             if (!isGameOver)
             {
                 pieceController.SetInputEnabled(true);
+            }
+        }
+
+        /// <summary>
+        /// Battle sequence for cinematic captures: face each other, play battle, destroy defender.
+        /// Called as a callback from PieceController.ExecuteCaptureMove.
+        /// </summary>
+        private IEnumerator ExecuteBattleSequence(GameObject attackerObj, GameObject defenderObj, 
+            PieceType attackerType, PieceType defenderType)
+        {
+            // Face each other
+            // Black pieces need 180° correction because their models face backward
+            if (attackerObj != null && defenderObj != null)
+            {
+                Vector3 toDefender = (defenderObj.transform.position - attackerObj.transform.position);
+                toDefender.y = 0f;
+                if (toDefender.sqrMagnitude > 0.001f)
+                {
+                    // Determine piece colors from GameObject names
+                    bool attackerIsBlack = attackerObj.name.Contains("Black");
+                    bool defenderIsBlack = defenderObj.name.Contains("Black");
+                    
+                    // Attacker faces defender
+                    Quaternion attackerBaseRot = Quaternion.LookRotation(toDefender);
+                    attackerObj.transform.rotation = attackerIsBlack
+                        ? attackerBaseRot * Quaternion.Euler(0f, 180f, 0f)
+                        : attackerBaseRot;
+                    
+                    // Defender faces attacker
+                    Quaternion defenderBaseRot = Quaternion.LookRotation(-toDefender);
+                    defenderObj.transform.rotation = defenderIsBlack
+                        ? defenderBaseRot * Quaternion.Euler(0f, 180f, 0f)
+                        : defenderBaseRot;
+                }
+            }
+
+            // Play cinematic battle
+            if (battleSystem != null)
+            {
+                yield return StartCoroutine(battleSystem.ExecuteCapture(
+                    attackerObj, defenderObj, attackerType, defenderType));
+            }
+
+            // Destroy defender
+            if (defenderObj != null)
+            {
+                Object.Destroy(defenderObj);
+            }
+
+            // Ensure attacker is active for final movement
+            if (attackerObj != null && !attackerObj.activeSelf)
+            {
+                attackerObj.SetActive(true);
             }
         }
 
@@ -403,10 +430,8 @@ namespace WizardChess.Core
                 rookTo = new BoardPosition(3, rank);
             }
 
-            // Select the rook temporarily to set it as the moving piece
-            pieceController.SelectPiece(rookFrom);
-            yield return StartCoroutine(pieceController.MovePieceTo(rookTo));
-            pieceController.DeselectPiece();
+            // Move the rook (normal move, no capture)
+            yield return StartCoroutine(pieceController.MovePieceTo(rookFrom, rookTo));
         }
 
         // ── Task 5.5: Game state handling ──────────────────────────────
@@ -501,11 +526,18 @@ namespace WizardChess.Core
 
         /// <summary>
         /// Smoothly moves a GameObject to a world position over duration.
+        /// Faces the movement direction at the start, then lerps smoothly.
+        /// Snaps to exact target at the end.
         /// </summary>
         private IEnumerator MoveToWorldPosition(GameObject obj, Vector3 target, float duration)
         {
             if (obj == null) yield break;
             Vector3 start = obj.transform.position;
+            Vector3 moveDir = target - start;
+            moveDir.y = 0f;
+            if (moveDir.sqrMagnitude > 0.01f)
+                obj.transform.rotation = Quaternion.LookRotation(moveDir);
+
             float elapsed = 0f;
             while (elapsed < duration)
             {
@@ -517,6 +549,19 @@ namespace WizardChess.Core
             }
             if (obj != null)
                 obj.transform.position = target;
+        }
+
+        /// <summary>
+        /// Triggers or stops walk animation on a piece's Animator.
+        /// </summary>
+        private static void TriggerWalkAnimation(GameObject piece, bool walking)
+        {
+            if (piece == null) return;
+            var animator = piece.GetComponentInChildren<Animator>();
+            if (animator != null && animator.runtimeAnimatorController != null)
+            {
+                animator.SetBool("Walking", walking);
+            }
         }
 
         // ── Promotion UI (OnGUI) ──────────────────────────────────────

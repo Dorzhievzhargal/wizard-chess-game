@@ -20,6 +20,12 @@ namespace WizardChess.Interfaces
         Vector3 BoardToWorldPosition(BoardPosition pos);
         BoardPosition? WorldToBoardPosition(Vector3 worldPos);
 
+        /// <summary>
+        /// Returns the exact world position for the center of a tile.
+        /// This is the single source of truth for tile positioning.
+        /// </summary>
+        Vector3 GetWorldPositionFromTile(int file, int rank);
+
         event Action<BoardPosition> OnTileClicked;
     }
 }

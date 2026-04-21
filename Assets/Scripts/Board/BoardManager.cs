@@ -37,7 +37,6 @@ namespace WizardChess.Board
 
         private GameObject[,] tiles;
         private Material[,] originalMaterials;
-        private Dictionary<string, GameObject> pieceObjects;
         private List<BoardPosition> highlightedPositions;
         private Transform boardParent;
 
@@ -51,7 +50,6 @@ namespace WizardChess.Board
         {
             tiles = new GameObject[BoardSize, BoardSize];
             originalMaterials = new Material[BoardSize, BoardSize];
-            pieceObjects = new Dictionary<string, GameObject>();
             highlightedPositions = new List<BoardPosition>();
 
             if (gameCamera == null)
@@ -69,6 +67,25 @@ namespace WizardChess.Board
         private void Update()
         {
             HandleInput();
+        }
+
+        private void OnDrawGizmos()
+        {
+            // Draw tile centers for debugging positioning issues
+            if (tiles == null) return;
+
+            Gizmos.color = Color.yellow;
+            for (int file = 0; file < BoardSize; file++)
+            {
+                for (int rank = 0; rank < BoardSize; rank++)
+                {
+                    Vector3 center = BoardToWorldPosition(new BoardPosition(file, rank));
+                    // Draw a small sphere at each tile center
+                    Gizmos.DrawWireSphere(center, 0.05f);
+                    // Draw a vertical line to make it visible
+                    Gizmos.DrawLine(center, center + Vector3.up * 0.1f);
+                }
+            }
         }
 
         // ── 3.1  Board generation & coordinate system ──────────────────
@@ -162,6 +179,7 @@ namespace WizardChess.Board
         /// <summary>
         /// Converts a board position (file 0-7, rank 0-7) to a world-space position.
         /// The board origin is at file=0, rank=0 (a1). Tiles are centered.
+        /// This is the SINGLE SOURCE OF TRUTH for tile center positions.
         /// </summary>
         public Vector3 BoardToWorldPosition(BoardPosition pos)
         {
@@ -169,6 +187,15 @@ namespace WizardChess.Board
             float y = boardOrigin.y;
             float z = boardOrigin.z + pos.Rank * tileSize + tileSize * 0.5f;
             return new Vector3(x, y, z);
+        }
+
+        /// <summary>
+        /// Returns the exact world position for the center of a tile.
+        /// Alias for BoardToWorldPosition for clarity in positioning code.
+        /// </summary>
+        public Vector3 GetWorldPositionFromTile(int file, int rank)
+        {
+            return BoardToWorldPosition(new BoardPosition(file, rank));
         }
 
         /// <summary>
@@ -294,121 +321,36 @@ namespace WizardChess.Board
             return false;
         }
 
-        // ── 3.5  Piece placement / removal ─────────────────────────────
+        // ── 3.5  Piece placement / removal (DEPRECATED - Use PieceController) ─────────────────────────────
 
         /// <summary>
-        /// Places a piece GameObject at the given board position.
-        /// If a piece already exists at that position, it is removed first.
-        /// The piece is represented as a child GameObject positioned on the tile.
+        /// DEPRECATED: Piece tracking moved to PieceController.
+        /// This method is kept for interface compatibility but does nothing.
         /// </summary>
         public void PlacePiece(ChessPiece piece, BoardPosition position)
         {
-            string key = PositionKey(position);
-
-            // Remove existing piece at this position if any
-            if (pieceObjects.ContainsKey(key))
-                RemovePiece(position);
-
-            GameObject pieceObj = CreatePlaceholderPiece(piece);
-            Vector3 worldPos = BoardToWorldPosition(position);
-            pieceObj.transform.position = new Vector3(worldPos.x, worldPos.y + tileSize * 0.5f, worldPos.z);
-            pieceObj.name = $"{piece.Color}_{piece.Type}_{(char)('a' + position.File)}{position.Rank + 1}";
-
-            if (boardParent != null)
-                pieceObj.transform.SetParent(boardParent);
-
-            pieceObjects[key] = pieceObj;
+            // No-op: PieceController handles all piece tracking
         }
 
         /// <summary>
-        /// Removes the piece at the given board position and destroys its GameObject.
+        /// DEPRECATED: Piece tracking moved to PieceController.
+        /// This method is kept for interface compatibility but does nothing.
         /// </summary>
         public void RemovePiece(BoardPosition position)
         {
-            string key = PositionKey(position);
-
-            if (pieceObjects.TryGetValue(key, out GameObject pieceObj))
-            {
-                if (pieceObj != null)
-                    Destroy(pieceObj);
-
-                pieceObjects.Remove(key);
-            }
+            // No-op: PieceController handles all piece tracking
         }
 
         /// <summary>
-        /// Returns the piece GameObject at the given position, or null.
+        /// DEPRECATED: Piece tracking moved to PieceController.
+        /// Returns null. Use PieceController.GetPieceObject instead.
         /// </summary>
         public GameObject GetPieceObjectAt(BoardPosition position)
         {
-            string key = PositionKey(position);
-            pieceObjects.TryGetValue(key, out GameObject obj);
-            return obj;
+            return null;
         }
 
         // ── Helpers ────────────────────────────────────────────────────
-
-        /// <summary>
-        /// Creates a simple placeholder piece using Unity primitives.
-        /// Different shapes per piece type for visual distinction.
-        /// </summary>
-        private GameObject CreatePlaceholderPiece(ChessPiece piece)
-        {
-            GameObject obj;
-
-            switch (piece.Type)
-            {
-                case PieceType.Pawn:
-                    obj = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-                    obj.transform.localScale = new Vector3(tileSize * 0.3f, tileSize * 0.4f, tileSize * 0.3f);
-                    break;
-                case PieceType.Rook:
-                    obj = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                    obj.transform.localScale = new Vector3(tileSize * 0.4f, tileSize * 0.5f, tileSize * 0.4f);
-                    break;
-                case PieceType.Knight:
-                    obj = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-                    obj.transform.localScale = new Vector3(tileSize * 0.35f, tileSize * 0.5f, tileSize * 0.35f);
-                    break;
-                case PieceType.Bishop:
-                    obj = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-                    obj.transform.localScale = new Vector3(tileSize * 0.3f, tileSize * 0.55f, tileSize * 0.3f);
-                    break;
-                case PieceType.Queen:
-                    obj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                    obj.transform.localScale = new Vector3(tileSize * 0.45f, tileSize * 0.6f, tileSize * 0.45f);
-                    break;
-                case PieceType.King:
-                    obj = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-                    obj.transform.localScale = new Vector3(tileSize * 0.4f, tileSize * 0.65f, tileSize * 0.4f);
-                    break;
-                default:
-                    obj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                    obj.transform.localScale = Vector3.one * tileSize * 0.3f;
-                    break;
-            }
-
-            // Color the piece based on side
-            var renderer = obj.GetComponent<MeshRenderer>();
-            if (renderer != null)
-            {
-                Color pieceColor = piece.Color == PieceColor.White
-                    ? new Color(0.9f, 0.85f, 0.75f)
-                    : new Color(0.2f, 0.15f, 0.2f);
-
-                if (renderer.material.HasProperty("_BaseColor"))
-                    renderer.material.SetColor("_BaseColor", pieceColor);
-                else
-                    renderer.material.color = pieceColor;
-            }
-
-            return obj;
-        }
-
-        private static string PositionKey(BoardPosition pos)
-        {
-            return $"{pos.File}_{pos.Rank}";
-        }
 
         private static bool IsValidPosition(int file, int rank)
         {

@@ -23,8 +23,7 @@ namespace WizardChess.Pieces
         [SerializeField] private float pieceYOffset = 0.0f;
 
         [Header("Movement Animation")]
-        [SerializeField] private float moveStepDuration = 0.2f;
-        [SerializeField] private float liftHeight = 0.5f;
+        [SerializeField] private float moveSpeed = 3.0f;
 
         // ── Internal state ─────────────────────────────────────────────
 
@@ -125,6 +124,28 @@ namespace WizardChess.Pieces
             string key = PositionKey(position);
             pieceObjects.Remove(key);
             pieceData.Remove(key);
+        }
+
+        /// <summary>
+        /// Re-registers a piece GameObject at a new position after a cinematic capture.
+        /// </summary>
+        public void RetrackPiece(GameObject pieceObj, BoardPosition oldPos, BoardPosition newPos)
+        {
+            string oldKey = PositionKey(oldPos);
+            string newKey = PositionKey(newPos);
+
+            // Remove from old position if still tracked
+            if (pieceObjects.ContainsKey(oldKey) && pieceObjects[oldKey] == pieceObj)
+            {
+                pieceObjects.Remove(oldKey);
+            }
+            if (pieceData.TryGetValue(oldKey, out var data))
+            {
+                pieceData.Remove(oldKey);
+                pieceData[newKey] = data;
+            }
+
+            pieceObjects[newKey] = pieceObj;
         }
 
         /// <summary>
@@ -233,10 +254,12 @@ namespace WizardChess.Pieces
         }
 
         /// <summary>
-        /// Animates the currently selected piece to the target position using step-by-step
-        /// hopping motion (lift → move horizontally → set down) for each intermediate tile.
-        /// Knights perform a single hop directly to the target.
-        /// After animation, updates internal dictionaries and clears selection.
+        /// Animates the currently selected piece smoothly from its current position
+        /// to the target board position. Triggers Walking animation on Animator models
+        /// during movement. After animation, updates internal dictionaries.
+        /// Does NOT clear selection state or restore selection visuals — that is
+        /// GameManager's responsibility via DeselectPiece().
+        /// Does NOT manage inputEnabled — that is GameManager's responsibility.
         /// </summary>
         public IEnumerator MovePieceTo(BoardPosition target)
         {
@@ -248,20 +271,35 @@ namespace WizardChess.Pieces
             if (!pieceObjects.TryGetValue(fromKey, out GameObject pieceObj)) yield break;
             if (!pieceData.TryGetValue(fromKey, out ChessPiece piece)) yield break;
 
-            // Disable input during movement animation to prevent concurrent interactions
-            bool wasInputEnabled = inputEnabled;
-            inputEnabled = false;
+            // Calculate target world position
+            Vector3 startPos = pieceObj.transform.position;
+            Vector3 endPos = GetWorldPosition(target);
 
-            // Build path: knights hop directly, others step tile-by-tile
-            List<BoardPosition> path = piece.Type == PieceType.Knight
-                ? new List<BoardPosition> { target }
-                : BuildStepPath(from, target);
+            // Face movement direction
+            Vector3 moveDir = endPos - startPos;
+            moveDir.y = 0f;
+            if (moveDir.sqrMagnitude > 0.001f)
+                pieceObj.transform.rotation = Quaternion.LookRotation(moveDir);
 
-            // Animate each step along the path
-            foreach (BoardPosition step in path)
+            // Start walk animation
+            SetWalkAnimation(pieceObj, true);
+
+            // Smooth lerp from current position to target (speed-based duration)
+            float distance = Vector3.Distance(startPos, endPos);
+            float duration = distance / Mathf.Max(moveSpeed, 0.1f);
+            float elapsed = 0f;
+
+            while (elapsed < duration)
             {
-                yield return AnimateSingleStep(pieceObj, step);
+                elapsed += Time.deltaTime;
+                float t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / duration));
+                pieceObj.transform.position = Vector3.Lerp(startPos, endPos, t);
+                yield return null;
             }
+
+            // Stop walk animation and snap to exact target
+            SetWalkAnimation(pieceObj, false);
+            pieceObj.transform.position = endPos;
 
             // Update dictionaries: remove old key, add new key
             string toKey = PositionKey(target);
@@ -271,120 +309,22 @@ namespace WizardChess.Pieces
             pieceData.Remove(fromKey);
             piece.Position = target;
             pieceData[toKey] = piece;
-
-            // Restore selection visuals before clearing state (piece has moved to new position)
-            if (selectedRenderers != null && originalColors != null)
-            {
-                for (int i = 0; i < selectedRenderers.Length; i++)
-                {
-                    if (selectedRenderers[i] != null)
-                    {
-                        Material mat = selectedRenderers[i].material;
-                        if (mat.HasProperty("_BaseColor"))
-                            mat.SetColor("_BaseColor", originalColors[i]);
-                        else
-                            mat.color = originalColors[i];
-                    }
-                }
-            }
-            // Restore original scale
-            if (originalSelectedScale != Vector3.zero)
-                pieceObj.transform.localScale = originalSelectedScale;
-
-            // Clear selection state
-            selectedPosition = null;
-            selectedRenderers = null;
-            originalColors = null;
-
-            // Restore input state after animation completes
-            inputEnabled = wasInputEnabled;
         }
 
         // ── Movement helpers ──────────────────────────────────────────
 
         /// <summary>
-        /// Builds a tile-by-tile path from <paramref name="from"/> to <paramref name="to"/>.
-        /// Moves along the file axis first, then the rank axis.
-        /// Does not include the starting position.
+        /// Sets the Walking bool on the piece's Animator (if present).
+        /// Used during smooth movement to trigger walk animation on 3D models.
         /// </summary>
-        private static List<BoardPosition> BuildStepPath(BoardPosition from, BoardPosition to)
+        private static void SetWalkAnimation(GameObject pieceObj, bool walking)
         {
-            var path = new List<BoardPosition>();
-
-            int currentFile = from.File;
-            int currentRank = from.Rank;
-
-            int fileDir = to.File > currentFile ? 1 : (to.File < currentFile ? -1 : 0);
-            int rankDir = to.Rank > currentRank ? 1 : (to.Rank < currentRank ? -1 : 0);
-
-            // Move diagonally as far as possible (both axes simultaneously)
-            while (currentFile != to.File && currentRank != to.Rank)
+            if (pieceObj == null) return;
+            var animator = pieceObj.GetComponentInChildren<Animator>();
+            if (animator != null && animator.runtimeAnimatorController != null)
             {
-                currentFile += fileDir;
-                currentRank += rankDir;
-                path.Add(new BoardPosition(currentFile, currentRank));
+                animator.SetBool("Walking", walking);
             }
-
-            // Then finish any remaining straight-line steps
-            while (currentFile != to.File)
-            {
-                currentFile += fileDir;
-                path.Add(new BoardPosition(currentFile, currentRank));
-            }
-
-            while (currentRank != to.Rank)
-            {
-                currentRank += rankDir;
-                path.Add(new BoardPosition(currentFile, currentRank));
-            }
-
-            return path;
-        }
-
-        /// <summary>
-        /// Animates a single hop: lift up → move horizontally → set down.
-        /// Each phase takes moveStepDuration / 3 seconds.
-        /// </summary>
-        private IEnumerator AnimateSingleStep(GameObject pieceObj, BoardPosition target)
-        {
-            Vector3 startPos = pieceObj.transform.position;
-            Vector3 endPos = GetWorldPosition(target);
-
-            float phaseDuration = moveStepDuration / 3f;
-
-            // Phase 1: Lift up
-            Vector3 liftedStart = startPos + Vector3.up * liftHeight;
-            yield return LerpPosition(pieceObj, startPos, liftedStart, phaseDuration);
-
-            // Phase 2: Move horizontally (stay lifted)
-            Vector3 liftedEnd = endPos + Vector3.up * liftHeight;
-            yield return LerpPosition(pieceObj, liftedStart, liftedEnd, phaseDuration);
-
-            // Phase 3: Set down
-            yield return LerpPosition(pieceObj, liftedEnd, endPos, phaseDuration);
-        }
-
-        /// <summary>
-        /// Smoothly interpolates a GameObject's position from start to end over the given duration.
-        /// </summary>
-        private static IEnumerator LerpPosition(GameObject obj, Vector3 from, Vector3 to, float duration)
-        {
-            if (duration <= 0f)
-            {
-                obj.transform.position = to;
-                yield break;
-            }
-
-            float elapsed = 0f;
-            while (elapsed < duration)
-            {
-                elapsed += Time.deltaTime;
-                float t = Mathf.Clamp01(elapsed / duration);
-                obj.transform.position = Vector3.Lerp(from, to, t);
-                yield return null;
-            }
-
-            obj.transform.position = to;
         }
 
         /// <summary>

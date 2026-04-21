@@ -102,6 +102,32 @@ namespace WizardChess.Pieces
             foreach (var col in model.GetComponentsInChildren<Collider>())
                 Object.Destroy(col);
 
+            // Tint the model for black pieces
+            if (color == PieceColor.Black)
+            {
+                Color darkTint = new Color(0.15f, 0.12f, 0.15f);
+                foreach (var renderer in model.GetComponentsInChildren<Renderer>())
+                {
+                    foreach (var mat in renderer.materials)
+                    {
+                        if (mat.HasProperty("_BaseColor"))
+                        {
+                            Color c = mat.GetColor("_BaseColor");
+                            mat.SetColor("_BaseColor", c * darkTint);
+                        }
+                        else if (mat.HasProperty("_Color"))
+                        {
+                            Color c = mat.GetColor("_Color");
+                            mat.SetColor("_Color", c * darkTint);
+                        }
+                        else
+                        {
+                            mat.color = mat.color * darkTint;
+                        }
+                    }
+                }
+            }
+
             return true;
         }
 

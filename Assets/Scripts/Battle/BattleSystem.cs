@@ -166,8 +166,12 @@ namespace WizardChess.Battle
                     }
                 }
 
-                // Phase 1: Piece-specific procedural attack animation on attacker
-                if (_animationController != null && attacker != null)
+                // Check if models have Animator (skip procedural animations if so)
+                bool attackerHasAnimator = attacker != null && HasModelAnimator(attacker);
+                bool defenderHasAnimator = defender != null && HasModelAnimator(defender);
+
+                // Phase 1: Attack animation on attacker
+                if (!attackerHasAnimator && _animationController != null && attacker != null)
                 {
                     _animationController.PlayAnimation(attacker, ChessAnimationState.Attack);
                 }
@@ -191,7 +195,7 @@ namespace WizardChess.Battle
                 }
 
                 // Phase 2: Hit reaction on defender — apply camera shake on impact
-                if (_animationController != null && defender != null)
+                if (!defenderHasAnimator && _animationController != null && defender != null)
                 {
                     _animationController.PlayAnimation(defender, ChessAnimationState.Hit_Reaction);
                 }
@@ -244,7 +248,7 @@ namespace WizardChess.Battle
                 }
 
                 // Return attacker to Idle
-                if (_animationController != null && attacker != null)
+                if (!attackerHasAnimator && _animationController != null && attacker != null)
                 {
                     _animationController.PlayAnimation(attacker, ChessAnimationState.Idle);
                 }
@@ -747,6 +751,16 @@ namespace WizardChess.Battle
             {
                 animator.SetTrigger(triggerName);
             }
+        }
+
+        /// <summary>
+        /// Returns true if the piece has a child with an Animator and a runtime controller.
+        /// </summary>
+        private static bool HasModelAnimator(GameObject piece)
+        {
+            if (piece == null) return false;
+            var animator = piece.GetComponentInChildren<Animator>();
+            return animator != null && animator.runtimeAnimatorController != null;
         }
     }
 }

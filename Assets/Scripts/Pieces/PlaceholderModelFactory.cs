@@ -21,15 +21,41 @@ namespace WizardChess.Pieces
         {
             GameObject root = new GameObject($"Piece_{color}_{type}");
 
-            // Try to load a 3D model prefab first; fall back to procedural primitives
+            // Try to load 3D model from Resources/Models folder
             bool usedPrefab = false;
-            if (type == PieceType.Pawn)
+            string modelPath = "";
+            
+            switch (type)
             {
-                usedPrefab = TryBuildFromPrefab(root, "Models/Pawn/Paladin WProp J Nordstrom@Rifle Turn", tileSize, "PawnAnimator", color);
+                case PieceType.Pawn:
+                    modelPath = "Models/Pawn/Pawn";
+                    break;
+                case PieceType.Rook:
+                    modelPath = "Models/Rook/Rook";
+                    break;
+                case PieceType.Knight:
+                    modelPath = "Models/Knight/Knight";
+                    break;
+                case PieceType.Bishop:
+                    modelPath = "Models/Bishop/Bishop";
+                    break;
+                case PieceType.Queen:
+                    modelPath = "Models/Queen/Queen";
+                    break;
+                case PieceType.King:
+                    modelPath = "Models/King/king";
+                    break;
+            }
+            
+            if (!string.IsNullOrEmpty(modelPath))
+            {
+                usedPrefab = TryBuildFromPrefab(root, modelPath, tileSize, $"{type}Animator", color, type);
             }
 
+            // Fallback to procedural primitives if model not found
             if (!usedPrefab)
             {
+                Debug.LogWarning($"[PlaceholderModelFactory] Failed to load model for {type} from '{modelPath}', using primitive fallback");
                 switch (type)
                 {
                     case PieceType.Pawn:
@@ -56,6 +82,11 @@ namespace WizardChess.Pieces
 
             AddRaycastCollider(root, type, tileSize);
 
+            // Debug: Log final state after creation
+            var renderers = root.GetComponentsInChildren<Renderer>();
+            Debug.Log($"[PlaceholderModelFactory] Created {color} {type}: usedModel={usedPrefab} " +
+                      $"renderers={renderers.Length} active={root.activeSelf} children={root.transform.childCount}");
+
             return root;
         }
 
@@ -63,45 +94,113 @@ namespace WizardChess.Pieces
         /// Attempts to instantiate a 3D model from a prefab/FBX and parent it to root.
         /// Returns true if successful.
         /// </summary>
-        private static bool TryBuildFromPrefab(GameObject root, string resourcePath, float tileSize, string animatorName, PieceColor color)
+        private static bool TryBuildFromPrefab(GameObject root, string resourcePath, float tileSize, string animatorName, PieceColor color, PieceType type)
         {
-            var prefab = Resources.Load<GameObject>(resourcePath);
+            // Load all assets from the FBX file
+            Object[] allAssets = Resources.LoadAll(resourcePath);
+            GameObject prefab = null;
+            
+            // Find the first GameObject in the loaded assets
+            foreach (var asset in allAssets)
+            {
+                if (asset is GameObject)
+                {
+                    prefab = asset as GameObject;
+                    break;
+                }
+            }
+            
             if (prefab == null)
             {
-                Debug.LogWarning($"PlaceholderModelFactory: Could not load prefab at '{resourcePath}', falling back to primitives.");
+                Debug.LogWarning($"[PlaceholderModelFactory] Could not load model at 'Resources/{resourcePath}' - no GameObject found in FBX, falling back to primitives");
                 return false;
             }
 
             var model = Object.Instantiate(prefab, root.transform);
             model.name = "Model";
 
-            // Scale the model to fit the tile (Mixamo models are ~1.8m tall, we want ~0.8 tile units)
-            float targetHeight = tileSize * 0.8f;
-            float modelHeight = 1.8f; // approximate Mixamo humanoid height
+            // Scale model - make it much bigger (20x increase)
+            // Pawns are 1.5x base size, non-pawns are 2.2x base size (slightly bigger)
+            float baseScale = 60.0f;
+            float sizeMultiplier = (type == PieceType.Pawn) ? 1.5f : 2.2f;
+            float targetHeight = tileSize * baseScale * sizeMultiplier;
+            float modelHeight = 1.8f;
             float scaleFactor = targetHeight / modelHeight;
             model.transform.localScale = Vector3.one * scaleFactor;
-            model.transform.localPosition = Vector3.zero;
-            // White faces toward black (positive Z), Black faces toward white (negative Z)
-            float yRotation = color == PieceColor.White ? 0f : 180f;
-            model.transform.localRotation = Quaternion.Euler(0f, yRotation, 0f);
 
-            // Assign Animator Controller if available
+            // ADJUST THIS VALUE to fix piece height:
+            // Different pieces have different pivot points in their FBX models
+            // Pawns use 0.379, other pieces use 0.639
+            float heightAdjustment = (type == PieceType.Pawn) ? 0.379f : 0.639f;
+            
+            model.transform.localPosition = new Vector3(0f, heightAdjustment, 0f);
+            
+            // Fix rotation: rotate 90 degrees on X axis to stand upright, then apply color rotation
+            // Rook needs extra 90 degree rotation to face forward
+            float baseYRotation = color == PieceColor.White ? 0f : 180f;
+            float extraRotation = (type == PieceType.Rook) ? 90f : 0f;
+            float yRotation = baseYRotation + extraRotation;
+            model.transform.localRotation = Quaternion.Euler(-90f, yRotation, 0f); // -90 on X to stand up
+
+            // Animator
             var animator = model.GetComponent<Animator>();
             if (animator == null)
                 animator = model.GetComponentInChildren<Animator>();
-            if (animator != null && !string.IsNullOrEmpty(animatorName))
+            if (animator != null)
             {
-                var controller = Resources.Load<RuntimeAnimatorController>(animatorName);
-                if (controller == null)
-                    controller = Resources.Load<RuntimeAnimatorController>("Models/Pawn/" + animatorName);
-                if (controller != null)
-                    animator.runtimeAnimatorController = controller;
+                animator.applyRootMotion = false;
+                if (!string.IsNullOrEmpty(animatorName))
+                {
+                    var controller = Resources.Load<RuntimeAnimatorController>(animatorName);
+                    if (controller == null)
+                        controller = Resources.Load<RuntimeAnimatorController>("Models/Pawn/" + animatorName);
+                    if (controller != null)
+                        animator.runtimeAnimatorController = controller;
+                }
             }
 
-            // Remove child colliders from the model
+            // Remove child colliders
             foreach (var col in model.GetComponentsInChildren<Collider>())
                 Object.Destroy(col);
 
+            // Check if model has renderers
+            var renderers = model.GetComponentsInChildren<Renderer>();
+            if (renderers.Length == 0)
+            {
+                Debug.LogWarning($"[PlaceholderModelFactory] No renderers found in model {prefab.name} - piece will be invisible!");
+            }
+            else
+            {
+                Debug.Log($"[PlaceholderModelFactory] Model {prefab.name} has {renderers.Length} renderers");
+            }
+
+            // Tint black pieces
+            if (color == PieceColor.Black)
+            {
+                Color darkTint = new Color(0.15f, 0.12f, 0.15f);
+                foreach (var renderer in model.GetComponentsInChildren<Renderer>())
+                {
+                    foreach (var mat in renderer.materials)
+                    {
+                        if (mat.HasProperty("_BaseColor"))
+                        {
+                            Color c = mat.GetColor("_BaseColor");
+                            mat.SetColor("_BaseColor", c * darkTint);
+                        }
+                        else if (mat.HasProperty("_Color"))
+                        {
+                            Color c = mat.GetColor("_Color");
+                            mat.SetColor("_Color", c * darkTint);
+                        }
+                        else
+                        {
+                            mat.color = mat.color * darkTint;
+                        }
+                    }
+                }
+            }
+
+            Debug.Log($"[PlaceholderModelFactory] Successfully attached model {prefab.name} to {root.name}");
             return true;
         }
 
